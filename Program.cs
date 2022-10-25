@@ -4,7 +4,7 @@ using System.Threading;
 using System.Xml.Serialization;
 using System;
 
-namespace spi;
+namespace Spi;
 
 class Program
 {
@@ -13,6 +13,8 @@ class Program
         string src = args[0];
         string dst = args[1];
 
+        DirectoryInfo srcDir = new DirectoryInfo(src);
+
         if ( ! Directory.Exists(src) )
         {
             Console.Error.WriteLine($"src directory does not exists. {src}");
@@ -20,12 +22,13 @@ class Program
         }
  
         CancellationTokenSource cts = new CancellationTokenSource();
-        var filesToCopy = Spi.EnumSrcFiles.Start(src);
-        var CopyTask =  Spi.CopyP.Start(src, dst, filesToCopy, cts.Token);
+        Stats stats = new Stats();
+        var filesToCopy = Spi.EnumSrcFiles.Start(new DirectoryInfo(src));
+        var CopyTask =  Spi.CopyP.Start(src, dst, filesToCopy, stats, cts.Token);
         
         while ( ! CopyTask.Wait( TimeSpan.FromSeconds(1) ) )
         {
-            
+            Console.WriteLine($"copied: files {stats.FilesCopied}, bytes {stats.BytesCopied}, errors {stats.ErrorsCopying}");
         }
 
         return 0;

@@ -8,74 +8,90 @@ using System.Collections.Generic;
 
 class CopyP 
 {
-    static bool OpenFileForReading(string filename, out FileStream? fs)
+    static FileStream? OpenFileForReading(string filename)
     {
         try
         {
-            fs = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read );
-            return true;
+            return new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read );
         }
         catch (Exception ex)
         {
-            fs = null;
             Console.Error.WriteLine($"E: open src: {filename} {ex.Message}");
-            return false;
+            return null;
         }
     }
-    static bool OpenFileForWriting(string filename, out FileStream? fs)
+    static async ValueTask<FileStream?> OpenFileForWriting(string filename)
     {
-        for(;;)
+        string? dir = Path.GetDirectoryName(filename);
+        if ( dir == null)
+        {
+            Console.Error.WriteLine($"directory is null or root for filename: [{filename}]");
+            return null;
+        }
+
+        Exception? lastEx = null;
+
+        for(int i=0; i < 3; ++i)
         {
             try
             {
-                fs = new FileStream(filename, FileMode.Create, FileAccess.Write, FileShare.Read );
-                return true;
+                return new FileStream(filename, FileMode.Create, FileAccess.Write, FileShare.Read);
             }
             catch (DirectoryNotFoundException)
             {
-                fs = null;
-                var dir = Path.GetDirectoryName(filename);
                 try
                 {
                     Directory.CreateDirectory(dir);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    await Task.Delay(TimeSpan.FromMilliseconds(100)).ConfigureAwait(false);
+                    lastEx = ex;
                     continue;
                 }
             }
         }
+
+        Console.Error.WriteLine($"E: directory could not be created. {dir} exeption: {lastEx?.Message}");
+        return null;
     }
 
-    //public static async Task Run(ChannelReader<FileInfo> toCopy, CancellationToken cts)
-    public static async Task Start(string srcBaseDir, string dstBaseDir, IAsyncEnumerable<string> srcFilesRelative, CancellationToken cts)
+    public static async Task Start(string srcBaseDir, string dstBaseDir, IAsyncEnumerable<FileInfo> srcFiles, Stats stats, CancellationToken cts)
     {
         int srcBaseDirLength = srcBaseDir.EndsWith(Path.DirectorySeparatorChar) 
             ? srcBaseDir.Length
             : srcBaseDir.Length + 1;
 
         await Parallel.ForEachAsync(
-            source: srcFilesRelative,
+            source: srcFiles,
             parallelOptions : new ParallelOptions() { MaxDegreeOfParallelism = 16, CancellationToken = cts },
-            body : async (string srcFilename, CancellationToken cts) =>
+            body : async (FileInfo srcFile, CancellationToken cts) =>
             {
-                string relativeFilename = srcFilename.Substring(srcBaseDirLength);
+                string relativeFilename = srcFile.FullName.Substring(srcBaseDirLength);
                 string dstFilename = System.IO.Path.Combine(dstBaseDir, relativeFilename );
 
-                Console.WriteLine($"{srcFilename,-40} -> {dstFilename} ({relativeFilename})");
+                Console.WriteLine($"{srcFile.FullName,-40} -> {dstFilename} ({relativeFilename})");
 
-                     if ( !OpenFileForReading(srcFilename, out FileStream? srcStream))
-                {
-                }
-                else if ( !OpenFileForWriting(dstFilename, out FileStream? dstStream))
-                {
-                }
-                else if ( srcStream != null && dstStream != null )
+                FileStream? srcStream;
+                FileStream? dstStream;
+                     if ( (srcStream =       OpenFileForReading(srcFile.FullName)) == null ) {}
+                else if ( (dstStream = await OpenFileForWriting(dstFilename))      == null)  {}
+                else 
                 {
                     using (srcStream)
                     using (dstStream)
                     {
-                        await srcStream.CopyToAsync(dstStream);
+                        try
+                        {
+                            await srcStream.CopyToAsync(dstStream,cts).ConfigureAwait(false);
+                            stats.IncrementFilesCopied((UInt64)srcFile.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            stats.IncrementErrorsCopying();
+                            Console.Error.WriteLine($"E: copy file. src {srcFile.FullName} -> {dstFilename}");
+                        }
+                        
                     }
                 }
             });
